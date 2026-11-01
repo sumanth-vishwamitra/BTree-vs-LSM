@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B+ Tree vs LSM Tree — Write Path Simulator</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>B+ Tree <span class="vs">vs</span> LSM Tree</h1>
+    <p>Identical random-write stream, two storage engines, one disk each. Discrete-event simulation with realistic relative latencies.</p>
+  </div>
+  <div class="clock" title="Simulated time elapsed">
+    <span class="lbl">SIMULATED TIME</span><span id="clock" class="val">0.00 s</span>
+    <span class="lbl sm">real <span id="realclock">0.0</span> s · <span id="speedlabel">0.1×</span></span>
+  </div>
+</header>
+
+<section class="controls" id="controls">
+  <div class="grp transport">
+    <button id="btnPlay" class="btn primary" title="Space">⏸ Pause</button>
+    <button id="btnReset" class="btn">↺ Reset</button>
+    <button id="btnFF" class="btn" title="Fast-forward 10 simulated seconds (computed instantly)">⏩ +10 s</button>
+  </div>
+  <div class="grp">
+    <label>Preset
+      <select id="preset">
+        <option value="hdd">HDD · heavy random writes</option>
+        <option value="ssd">SSD · heavy random writes</option>
+        <option value="mixed">HDD · 50% reads / 50% writes</option>
+        <option value="zipf">HDD · skewed (Zipfian) keys</option>
+        <option value="seq">HDD · sequential keys</option>
+        <option value="custom" hidden>Custom</option>
+      </select>
+    </label>
+    <label>Storage
+      <select id="storage"><option value="hdd">HDD (7200 RPM)</option><option value="ssd">SATA SSD</option></select>
+    </label>
+    <label>Key pattern
+      <select id="dist"><option value="uniform">Uniform random</option><option value="zipf">Zipfian (hot keys)</option><option value="seq">Sequential (ascending)</option></select>
+    </label>
+  </div>
+  <div class="grp sliders">
+    <label class="slider">Speed <b id="speedVal">0.1×</b>
+      <input id="speed" type="range" min="-3" max="1" step="0.05" value="-1">
+    </label>
+    <label class="slider">Offered load <b id="rateVal">3,000 ops/s</b>
+      <input id="rate" type="range" min="2" max="5" step="0.02" value="3.477">
+    </label>
+    <label class="slider">Write ratio <b id="wrVal">100%</b>
+      <input id="wr" type="range" min="0" max="100" step="5" value="100">
+    </label>
+  </div>
+  <div class="grp">
+    <label>Page size
+      <select id="pageSize"><option value="4096">4 KB</option><option value="8192">8 KB</option><option value="16384">16 KB</option><option value="32768">32 KB</option></select>
+    </label>
+    <label>MemTable
+      <select id="memBytes"><option value="65536">64 KB</option><option value="131072">128 KB</option><option value="262144" selected>256 KB</option><option value="524288">512 KB</option><option value="1048576">1 MB</option><option value="4194304">4 MB</option></select>
+    </label>
+    <label>Cache
+      <select id="cacheBytes"><option value="1048576">1 MB</option><option value="2097152">2 MB</option><option value="4194304" selected>4 MB</option><option value="8388608">8 MB</option><option value="16777216">16 MB</option><option value="33554432">32 MB</option></select>
+    </label>
+    <label>Dataset
+      <select id="dataset"><option value="20000">20k keys</option><option value="100000" selected>100k keys</option><option value="300000">300k keys</option></select>
+    </label>
+    <label>Value
+      <select id="valueBytes"><option value="32">32 B</option><option value="100" selected>100 B</option><option value="256">256 B</option><option value="1024">1 KB</option></select>
+    </label>
+    <label>Seed <input id="seed" type="number" value="7" min="1" max="9999"></label>
+  </div>
+  <div class="hint" id="hint">Storage, page size, MemTable, cache, dataset and value size rebuild both engines (the same keys are replayed). Speed, load, write ratio and key pattern change live.</div>
+</section>
+
+<section class="score" id="score">
+  <div class="tile"><span class="lbl">THROUGHPUT</span><span class="big" id="sThr">—</span><span class="sub" id="sThrSub"></span></div>
+  <div class="tile"><span class="lbl">p99 LATENCY</span><span class="big" id="sP99">—</span><span class="sub" id="sP99Sub"></span></div>
+  <div class="tile"><span class="lbl">DISK SEEKS</span><span class="big" id="sSeek">—</span><span class="sub" id="sSeekSub"></span></div>
+  <div class="tile"><span class="lbl">WRITE AMPLIFICATION</span><span class="big" id="sWA">—</span><span class="sub" id="sWASub"></span></div>
+  <div class="verdict" id="verdict">Warming up…</div>
+</section>
+
+<main class="engines">
+  <article class="panel" id="panelBT">
+    <h2><span class="dot bt"></span>B+ Tree <small>update-in-place · random page writes</small><span class="badge" id="badgeBT"></span></h2>
+    <div class="cv"><canvas id="cvBT"></canvas></div>
+    <div class="metrics" id="mBT"></div>
+  </article>
+  <article class="panel" id="panelLSM">
+    <h2><span class="dot lsm"></span>LSM Tree <small>append-only · sequential writes + compaction</small><span class="badge" id="badgeLSM"></span></h2>
+    <div class="cv"><canvas id="cvLSM"></canvas></div>
+    <div class="metrics" id="mLSM"></div>
+  </article>
+</main>
+
+<section class="charts">
+  <div class="chart"><h3>Throughput (ops/s)</h3><canvas id="chThr"></canvas></div>
+  <div class="chart"><h3>p99 latency (log scale)</h3><canvas id="chP99"></canvas></div>
+  <div class="chart"><h3>Queue depth</h3><canvas id="chQD"></canvas></div>
+  <div class="chartlegend"><span><i class="sw bt"></i>B+ Tree</span><span><i class="sw lsm"></i>LSM Tree</span></div>
+</section>
+
+<section class="lower">
+  <div class="logbox">
+    <h3>Event log <small>coalesced · both engines</small></h3>
+    <div id="log" class="log"></div>
+  </div>
+  <div class="legend">
+    <h3>Legend</h3>
+    <ul>
+      <li><i class="sw" style="background:#22d3ee"></i><b>Memory</b> — buffer pool, MemTable, WAL buffer, block cache (microseconds)</li>
+      <li><i class="sw" style="background:#a78bfa"></i><b>CPU</b> — parsing, key search, page / skip-list work</li>
+      <li><i class="sw" style="background:#fbbf24"></i><b>Queue</b> — requests waiting for the single writer thread</li>
+      <li><i class="sw" style="background:#ff5d6c"></i><b>Random disk I/O</b> — head must seek (milliseconds on HDD)</li>
+      <li><i class="sw" style="background:#34d399"></i><b>Sequential I/O</b> — WAL appends and SSTable streams</li>
+      <li><i class="sw" style="background:#f472b6"></i><b>Background work</b> — flush &amp; compaction threads</li>
+      <li><i class="sw" style="background:#60a5fa"></i><b>Completed</b> — durable once the WAL fsync returns</li>
+    </ul>
+    <p class="note">Only a sample of requests is drawn as dots so the animation stays readable; every request is simulated and counted in the metrics.</p>
+  </div>
+</section>
+
+<section class="why">
+  <h3>Why the LSM Tree wins sustained random writes</h3>
+  <div class="cards">
+    <div class="card"><h4>1 · Random vs sequential</h4><p>Each B+ Tree insert dirties a leaf page somewhere in the file. Evicting or cleaning that page is a <em>random</em> write: seek + rotational wait (≈ 5–10 ms on an HDD) to write 4 KB. The LSM Tree absorbs the same insert into RAM and writes it later in a long <em>sequential</em> stream at full disk bandwidth.</p></div>
+    <div class="card"><h4>2 · Cache misses on the write path</h4><p>A B+ Tree must read the target leaf before modifying it. When the dataset exceeds the cache, most inserts first pay a random <em>read</em>, then later a random <em>write</em>. LSM inserts never read the data files.</p></div>
+    <div class="card"><h4>3 · The WAL is the same for both</h4><p>Both engines make writes durable with an append-only log and group commit (on an HDD each commit waits about one platter rotation, so both are capped near ~100 commits/s and batch many requests per commit). The difference is what happens afterwards: the B+ Tree owes the disk a random page write per dirty leaf, the LSM Tree owes a batched sequential flush.</p></div>
+    <div class="card"><h4>4 · Compaction is the price</h4><p>LSM write amplification is real — data is rewritten as it moves down levels. But those rewrites are large sequential I/Os. B+ Tree amplification is smaller in theory per page, yet each unit is a 4–16 KB random write for a ~100 B record, and splits add more.</p></div>
+    <div class="card"><h4>5 · Where LSM can hurt</h4><p>Push the offered load far beyond what the disk can stream and compaction falls behind: L0 files pile up and the engine slows or stops writes (watch the stall counter). Reads also touch more files. Try the 50% read preset or sequential keys — the gap narrows.</p></div>
+    <div class="card"><h4>6 · SSD changes the ratio</h4><p>An SSD removes the mechanical seek, so the B+ Tree improves dramatically, but random page writes still cost more than batched sequential ones and wear flash through write amplification. The LSM Tree stays ahead.</p></div>
+  </div>
+</section>
+<footer>Simulation model: single-threaded writer, LRU buffer pool with background page cleaner (B+ Tree); leveled compaction, L0 slowdown/stop triggers, bloom filters and block cache (LSM); single-queue disk with seek + rotation + transfer. Latencies are relative, not benchmarks of any specific product.</footer>
+
+<script src="engine.js"></script>
+<script src="render.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
